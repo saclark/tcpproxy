@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/saclark/tcpproxy/pkg/config"
 )
@@ -29,6 +30,22 @@ func main() {
 	}()
 
 	// TODO: put a proxy here :)
+	cfg, err := cfgStore.Read()
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	ln := Listener{
+		KeepAlive: 3 * time.Minute,
+		Handler:   handleConn,
+	}
+
+	go func() {
+		err = ln.Listen(ctx, "tcp", fmt.Sprintf(":%d", cfg.Apps[0].Ports[0]))
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}()
 
 	<-ctx.Done()
 }
