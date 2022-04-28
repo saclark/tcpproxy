@@ -1,5 +1,7 @@
 package main
 
+import "errors"
+
 type RoundRobinLoadBalancer struct {
 	backends []string
 	next     chan string
@@ -34,7 +36,27 @@ func unique(s []string) []string {
 	return uniq
 }
 
-func (lb *RoundRobinLoadBalancer) SelectBackend() string {
+var SkipBackend = errors.New("skip this backend")
+
+var ErrNoHealthyBackends = errors.New("no healthy backends")
+
+func (lb *RoundRobinLoadBalancer) Send(f func(addr string) error) error {
+	var attemps int
+	for attemps < lb.len {
+		err := f(lb.nextAddr())
+		switch err {
+		case nil:
+			return nil
+		case SkipBackend:
+			attemps++
+		default:
+			return err
+		}
+	}
+	return ErrNoHealthyBackends
+}
+
+func (lb *RoundRobinLoadBalancer) nextAddr() string {
 	addr := <-lb.next
 	lb.i++
 	lb.next <- lb.backends[lb.i%lb.len]

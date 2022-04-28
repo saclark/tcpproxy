@@ -9,7 +9,7 @@ import (
 )
 
 type LoadBalancer interface {
-	SelectBackend() string
+	Send(f func(addr string) error) error
 }
 
 type ProxyHandler struct {
@@ -29,25 +29,33 @@ func NewProxyHandler(network string, dialTimeout time.Duration, lb LoadBalancer)
 func (h ProxyHandler) HandleConn(conn net.Conn) {
 	defer conn.Close()
 
-	target := h.lb.SelectBackend()
-	targetConn, err := net.DialTimeout(h.Network, target, h.DialTimeout)
+	err := h.lb.Send(func(addr string) error {
+		targetConn, err := net.DialTimeout(h.Network, addr, h.DialTimeout)
+		if err != nil {
+			// Log for debugging purposes.
+			log.Printf("Failed to connect: '%v'. Choosing new target...", err)
+			return SkipBackend
+		}
+		defer targetConn.Close()
+
+		done := make(chan error)
+		go func() {
+			defer close(done)
+			done <- copyConn(targetConn, conn)
+		}()
+
+		if err := copyConn(conn, targetConn); err != nil {
+			return fmt.Errorf("copying remote conn to local: %w", err)
+		}
+		if err := <-done; err != nil {
+			return fmt.Errorf("copying local conn to remote: %w", err)
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		log.Printf("Failed to connect: '%v'. Choosing new target...", err)
-		return
-	}
-	defer targetConn.Close()
-
-	done := make(chan error)
-	go func() {
-		defer close(done)
-		done <- copyConn(targetConn, conn)
-	}()
-
-	if err := copyConn(conn, targetConn); err != nil {
-		log.Printf("Copying remote conn to local: %v", err)
-	}
-	if err := <-done; err != nil {
-		log.Printf("Copying local conn to remote: %v", err)
+		log.Println(err)
 	}
 }
 

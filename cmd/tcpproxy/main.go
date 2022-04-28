@@ -35,7 +35,7 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	lb := NewRoundRobinLoadBalancer(cfg.Apps[0].Targets)
+	lb := NewRoundRobinLoadBalancer(cfg.Apps[1].Targets)
 	h := NewProxyHandler("tcp", 3*time.Second, lb)
 	ln := Listener{
 		KeepAlive: 3 * time.Minute,
@@ -43,7 +43,7 @@ func main() {
 	}
 
 	go func() {
-		err = ln.Listen(ctx, "tcp", fmt.Sprintf(":%d", cfg.Apps[0].Ports[0]))
+		err = ln.Listen(ctx, "tcp", fmt.Sprintf(":%d", cfg.Apps[1].Ports[0]))
 		if err != nil {
 			log.Fatalln(err)
 		}
