@@ -35,12 +35,8 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	h := ProxyHandler{
-		Network:     "tcp",
-		Target:      cfg.Apps[0].Targets[0],
-		DialTimeout: 3 * time.Second,
-	}
-
+	lb := NewRoundRobinLoadBalancer(cfg.Apps[0].Targets)
+	h := NewProxyHandler("tcp", 3*time.Second, lb)
 	ln := Listener{
 		KeepAlive: 3 * time.Minute,
 		Handler:   h.HandleConn,

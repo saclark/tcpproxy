@@ -8,16 +8,29 @@ import (
 	"time"
 )
 
+type LoadBalancer interface {
+	SelectBackend() string
+}
+
 type ProxyHandler struct {
 	Network     string
-	Target      string
 	DialTimeout time.Duration
+	lb          LoadBalancer
+}
+
+func NewProxyHandler(network string, dialTimeout time.Duration, lb LoadBalancer) *ProxyHandler {
+	return &ProxyHandler{
+		Network:     network,
+		DialTimeout: dialTimeout,
+		lb:          lb,
+	}
 }
 
 func (h ProxyHandler) HandleConn(conn net.Conn) {
 	defer conn.Close()
 
-	targetConn, err := net.DialTimeout(h.Network, h.Target, h.DialTimeout)
+	target := h.lb.SelectBackend()
+	targetConn, err := net.DialTimeout(h.Network, target, h.DialTimeout)
 	if err != nil {
 		log.Printf("Failed to connect: '%v'. Choosing new target...", err)
 		return
