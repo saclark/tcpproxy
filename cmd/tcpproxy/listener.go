@@ -10,7 +10,7 @@ import (
 
 type Listener struct {
 	KeepAlive time.Duration
-	Handler   func(ctx context.Context, conn net.Conn)
+	Handler   func(conn net.Conn)
 }
 
 func (l *Listener) Listen(ctx context.Context, network, address string) error {
@@ -31,6 +31,6 @@ func (l *Listener) Listen(ctx context.Context, network, address string) error {
 				continue
 			}
 		}
-		go l.Handler(ctx, conn)
+		go l.Handler(conn)
 	}
 }

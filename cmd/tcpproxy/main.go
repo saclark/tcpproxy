@@ -35,9 +35,15 @@ func main() {
 		log.Fatalln(err)
 	}
 
+	h := ProxyHandler{
+		Network:     "tcp",
+		Target:      cfg.Apps[0].Targets[0],
+		DialTimeout: 3 * time.Second,
+	}
+
 	ln := Listener{
 		KeepAlive: 3 * time.Minute,
-		Handler:   handleConn,
+		Handler:   h.HandleConn,
 	}
 
 	go func() {
