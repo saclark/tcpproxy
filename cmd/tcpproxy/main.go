@@ -35,19 +35,23 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	lb := NewRoundRobinLoadBalancer(cfg.Apps[1].Targets)
-	h := NewProxyHandler("tcp", 3*time.Second, lb)
-	ln := Listener{
-		KeepAlive: 3 * time.Minute,
-		Handler:   h.HandleConn,
-	}
-
-	go func() {
-		err = ln.Listen(ctx, "tcp", fmt.Sprintf(":%d", cfg.Apps[1].Ports[0]))
-		if err != nil {
-			log.Fatalln(err)
+	for _, app := range cfg.Apps {
+		lb := NewRoundRobinLoadBalancer(app.Targets)
+		h := NewProxyHandler("tcp", 3*time.Second, lb)
+		for _, port := range app.Ports {
+			ln := Listener{
+				KeepAlive: 3 * time.Minute,
+				Handler:   h.HandleConn,
+			}
+			port := port // prevent loop variable capture
+			go func() {
+				err = ln.Listen(ctx, "tcp", fmt.Sprintf(":%d", port))
+				if err != nil {
+					log.Fatalln(err)
+				}
+			}()
 		}
-	}()
+	}
 
 	<-ctx.Done()
 }
