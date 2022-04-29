@@ -3,87 +3,79 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net"
 	"sync"
 	"time"
 )
 
-var ErrServerClosed = errors.New("proxy: Server closed")
-
-var ErrServerRunning = errors.New("proxy: Server running")
+var ErrServerClosed = errors.New("server closed")
 
 type Server struct {
-	Network     string
-	Addr        string
-	Handler     ConnHandler
-	KeepAlive   time.Duration
-	shutdownCtx context.Context
-	cancel      context.CancelFunc
-	done        chan error
+	Handler   ConnHandler
+	listeners map[*net.Listener]struct{}
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	mu        sync.Mutex
 }
 
-func (s *Server) ListenAndServe() error {
-	if !s.closed() {
-		return ErrServerRunning
-	}
-
+func NewServer(handler ConnHandler) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
-	s.done = make(chan error)
-
-	lc := net.ListenConfig{KeepAlive: s.KeepAlive}
-	ln, err := lc.Listen(ctx, s.Network, s.Addr)
-	if err != nil {
-		return fmt.Errorf("starting listener on %s: %w", s.Addr, err)
+	return &Server{
+		Handler:   handler,
+		listeners: map[*net.Listener]struct{}{},
+		ctx:       ctx,
+		cancel:    cancel,
 	}
+}
 
-	var wg sync.WaitGroup
+func (s *Server) Serve(l net.Listener) error {
+	defer s.removeListener(&l)
+	s.mu.Lock()
+	s.listeners[&l] = struct{}{}
+	s.mu.Unlock()
 
-	go func() {
-		// Await shutdown signal.
-		<-ctx.Done()
-
-		// Close the listener, breaking the Accept loop and returning from
-		// ListenAndServe.
-		err := ln.Close()
-
-		// Wait for all handlers to complete or cancellation of shutdownCtx,
-		// whichever comes first.
-		handling := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(handling)
-		}()
-
-		select {
-		case <-s.shutdownCtx.Done():
-		case <-handling:
-		}
-
-		s.done <- err
-	}()
+	var tmpDelay time.Duration
 
 	for {
-		conn, err := ln.Accept()
+		conn, err := l.Accept()
 		if err != nil {
-			select {
-			case <-ctx.Done():
-				// Server shutdown.
+			if s.closed() {
 				return ErrServerClosed
-			default:
-				go log.Printf("Accepting conn: %v", err)
+			}
+
+			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+				if tmpDelay == 0 {
+					tmpDelay = 5 * time.Millisecond
+				} else {
+					tmpDelay *= 2
+				}
+				if max := 1 * time.Second; tmpDelay > max {
+					tmpDelay = max
+				}
+
+				log.Printf("Accept error: %v; retrying in %v", err, tmpDelay)
+				time.Sleep(tmpDelay)
+
 				continue
 			}
+
+			return err
 		}
 
-		wg.Add(1)
+		s.wg.Add(1)
 		go func() {
-			defer wg.Done()
+			defer s.wg.Done()
 			s.Handler.ServeConn(conn)
 		}()
 	}
+}
+
+func (s *Server) removeListener(l *net.Listener) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.listeners, l)
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -91,13 +83,32 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return ErrServerClosed
 	}
 
-	s.shutdownCtx = ctx
-
+	// Mark the server as closed.
 	s.cancel()
-	s.cancel = nil
 
-	err := <-s.done
-	s.done = nil
+	// Close the listeners, breaking the Accept loops and causing calls to Serve
+	// to return.
+	s.mu.Lock()
+	var err error
+	for ln := range s.listeners {
+		if cerr := (*ln).Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}
+	s.mu.Unlock()
+
+	// Wait for all handlers to complete or for cancellation of ctx, whichever
+	// comes first.
+	handling := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(handling)
+	}()
+
+	select {
+	case <-ctx.Done():
+	case <-handling:
+	}
 
 	if err != nil {
 		return err
@@ -106,7 +117,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// TODO: Bug: May race if called simultaneously by multiple goroutines.
 func (s *Server) closed() bool {
-	return s.cancel == nil || s.done == nil
+	select {
+	case <-s.ctx.Done():
+		return true
+	default:
+		return false
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"sync"
@@ -37,43 +38,49 @@ func main() {
 	}
 
 	var wg sync.WaitGroup
-	proxies := map[int]*Server{}
+	servers := map[string]*Server{}
+
 	for _, app := range cfg.Apps {
 		lb := NewRoundRobinLoadBalancer(app.Targets)
 		handler := NewProxyHandler("tcp", 3*time.Second, lb)
-		for _, port := range app.Ports {
-			s := &Server{
-				Network:   "tcp",
-				Addr:      fmt.Sprintf(":%d", port),
-				Handler:   handler,
-				KeepAlive: 3 * time.Minute,
-			}
+		srv := NewServer(handler)
 
-			proxies[port] = s
+		servers[app.Name] = srv
+
+		for _, port := range app.Ports {
+			addr := fmt.Sprintf(":%d", port)
+			log.Printf("Listening on %v", addr)
+
+			lc := net.ListenConfig{KeepAlive: 3 * time.Minute}
+			l, err := lc.Listen(ctx, "tcp", addr)
+			if err != nil {
+				defer l.Close() // In case we've already started listeners.
+				log.Fatalln(err)
+			}
 
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				log.Printf("Listening on %v", s.Addr)
-				if err := s.ListenAndServe(); err != ErrServerClosed {
-					log.Printf("ListenAndServe: %v", err)
+				if err := srv.Serve(l); err != nil && err != ErrServerClosed {
+					log.Printf("Serve: %v", err)
 				}
-				log.Printf("Shutdown listener on %v", s.Addr)
+				log.Printf("Shutdown listener on %v", addr)
 			}()
 		}
 	}
 
 	<-ctx.Done()
-	for _, p := range proxies {
-		// wrap in a func to accomodate defer
-		func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := p.Shutdown(ctx); err != nil {
-				log.Printf("Shutdown: %v", err)
-			}
-		}()
+
+	// Limit how long we will wait for all servers to shutdown.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, srv := range servers {
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("Shutdown: %v", err)
+		}
 	}
+
+	// Wait for Serve goroutines to exit.
 	wg.Wait()
 }
 
