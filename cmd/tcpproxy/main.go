@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"time"
 
 	"github.com/saclark/tcpproxy/pkg/config"
@@ -35,25 +36,45 @@ func main() {
 		log.Fatalln(err)
 	}
 
+	var wg sync.WaitGroup
+	proxies := map[int]*Server{}
 	for _, app := range cfg.Apps {
 		lb := NewRoundRobinLoadBalancer(app.Targets)
-		h := NewProxyHandler("tcp", 3*time.Second, lb)
+		handler := NewProxyHandler("tcp", 3*time.Second, lb)
 		for _, port := range app.Ports {
-			ln := Listener{
+			s := &Server{
+				Network:   "tcp",
+				Addr:      fmt.Sprintf(":%d", port),
+				Handler:   handler,
 				KeepAlive: 3 * time.Minute,
-				Handler:   h.HandleConn,
 			}
-			port := port // prevent loop variable capture
+
+			proxies[port] = s
+
+			wg.Add(1)
 			go func() {
-				err = ln.Listen(ctx, "tcp", fmt.Sprintf(":%d", port))
-				if err != nil {
-					log.Fatalln(err)
+				defer wg.Done()
+				log.Printf("Listening on %v", s.Addr)
+				if err := s.ListenAndServe(); err != ErrServerClosed {
+					log.Printf("ListenAndServe: %v", err)
 				}
+				log.Printf("Shutdown listener on %v", s.Addr)
 			}()
 		}
 	}
 
 	<-ctx.Done()
+	for _, p := range proxies {
+		// wrap in a func to accomodate defer
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := p.Shutdown(ctx); err != nil {
+				log.Printf("Shutdown: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // newCancelableContext returns a context that gets canceled by a SIGINT

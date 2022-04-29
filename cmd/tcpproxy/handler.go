@@ -12,6 +12,10 @@ type LoadBalancer interface {
 	Send(f func(addr string) error) error
 }
 
+type ConnHandler interface {
+	ServeConn(conn net.Conn)
+}
+
 type ProxyHandler struct {
 	Network     string
 	DialTimeout time.Duration
@@ -26,7 +30,7 @@ func NewProxyHandler(network string, dialTimeout time.Duration, lb LoadBalancer)
 	}
 }
 
-func (h ProxyHandler) HandleConn(conn net.Conn) {
+func (h ProxyHandler) ServeConn(conn net.Conn) {
 	defer conn.Close()
 
 	err := h.lb.Send(func(addr string) error {

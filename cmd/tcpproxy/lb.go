@@ -41,14 +41,14 @@ var SkipBackend = errors.New("skip this backend")
 var ErrNoHealthyBackends = errors.New("no healthy backends")
 
 func (lb *RoundRobinLoadBalancer) Send(f func(addr string) error) error {
-	var attemps int
-	for attemps < lb.len {
+	var attempts int
+	for attempts < lb.len {
 		err := f(lb.nextAddr())
 		switch err {
 		case nil:
 			return nil
 		case SkipBackend:
-			attemps++
+			attempts++
 		default:
 			return err
 		}
