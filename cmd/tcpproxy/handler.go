@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/netip"
 	"time"
 )
 
@@ -14,6 +15,48 @@ type LoadBalancer interface {
 
 type ConnHandler interface {
 	ServeConn(conn net.Conn)
+}
+
+type ProxyDispatchHandler struct {
+	Network          string
+	DialTimeout      time.Duration
+	portRoutingTable map[int]LoadBalancer
+	// Poor man's mutex so we don't have to worry about not copying sync.Mutex.
+	lock chan struct{}
+}
+
+func NewProxyDispatchHandler(network string, dialTimeout time.Duration, portRoutingTable map[int]LoadBalancer) *ProxyDispatchHandler {
+	lock := make(chan struct{}, 1)
+	lock <- struct{}{}
+	return &ProxyDispatchHandler{
+		Network:          network,
+		DialTimeout:      dialTimeout,
+		portRoutingTable: portRoutingTable,
+		lock:             lock,
+	}
+}
+
+func (h ProxyDispatchHandler) ServeConn(conn net.Conn) {
+	defer conn.Close()
+
+	addr := conn.LocalAddr().String()
+	addrp, err := netip.ParseAddrPort(addr)
+	if err != nil {
+		log.Printf("Parsing address port: %v", err)
+		return
+	}
+
+	<-h.lock
+	lb, exists := h.portRoutingTable[int(addrp.Port())]
+	h.lock <- struct{}{}
+	if !exists {
+		return
+	}
+
+	err = proxyConn(conn, h.Network, h.DialTimeout, lb)
+	if err != nil {
+		log.Printf("Error proxying connection: %v", err)
+	}
 }
 
 type ProxyHandler struct {
@@ -32,12 +75,17 @@ func NewProxyHandler(network string, dialTimeout time.Duration, lb LoadBalancer)
 
 func (h ProxyHandler) ServeConn(conn net.Conn) {
 	defer conn.Close()
+	err := proxyConn(conn, h.Network, h.DialTimeout, h.lb)
+	if err != nil {
+		log.Printf("Error proxying connection: %v", err)
+	}
+}
 
-	err := h.lb.Send(func(addr string) error {
-		targetConn, err := net.DialTimeout(h.Network, addr, h.DialTimeout)
+func proxyConn(conn net.Conn, network string, dialTimeout time.Duration, lb LoadBalancer) error {
+	return lb.Send(func(addr string) error {
+		targetConn, err := net.DialTimeout(network, addr, dialTimeout)
 		if err != nil {
-			// Log for debugging purposes.
-			log.Printf("Failed to connect: '%v'. Choosing new target...", err)
+			log.Printf("Failed to connect to %s. Trying another target.", addr)
 			return SkipBackend
 		}
 		defer targetConn.Close()
@@ -57,10 +105,6 @@ func (h ProxyHandler) ServeConn(conn net.Conn) {
 
 		return nil
 	})
-
-	if err != nil {
-		log.Println(err)
-	}
 }
 
 func copyConn(dst, src net.Conn) error {

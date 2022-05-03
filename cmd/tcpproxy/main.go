@@ -2,18 +2,22 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/signal"
-	"sync"
+	"syscall"
 	"time"
 
 	"github.com/saclark/tcpproxy/pkg/config"
 )
 
 func main() {
+	lport := flag.Int("port", 4001, "port on which to listen")
+	flag.Parse()
+
 	ctx := newCancelableContext()
 
 	cfgStore := config.NewConfigStore("./config.json")
@@ -34,60 +38,73 @@ func main() {
 	// TODO: put a proxy here :)
 	cfg, err := cfgStore.Read()
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatalf("Reading configuration: %v", err)
 	}
 
-	var wg sync.WaitGroup
-	servers := map[string]*Server{}
-
+	ports := []int{}
+	portRoutingTable := map[int]LoadBalancer{}
 	for _, app := range cfg.Apps {
 		lb := NewRoundRobinLoadBalancer(app.Targets)
-		handler := NewProxyHandler("tcp", 3*time.Second, lb)
-		srv := NewServer(handler)
-
-		servers[app.Name] = srv
-
 		for _, port := range app.Ports {
-			addr := fmt.Sprintf(":%d", port)
-			log.Printf("Listening on %v", addr)
+			ports = append(ports, port)
+			portRoutingTable[port] = lb
+		}
+	}
 
-			lc := net.ListenConfig{KeepAlive: 3 * time.Minute}
-			l, err := lc.Listen(ctx, "tcp", addr)
-			if err != nil {
-				defer l.Close() // In case we've already started listeners.
-				log.Fatalln(err)
+	sockfd := make(chan uintptr, 1)
+	defer close(sockfd)
+
+	lc := net.ListenConfig{
+		KeepAlive: 3 * time.Minute,
+		Control: func(_, _ string, c syscall.RawConn) error {
+			return c.Control(func(fd uintptr) {
+				sockfd <- fd
+			})
+		},
+	}
+
+	l, err := lc.Listen(ctx, "tcp", fmt.Sprintf(":%d", *lport))
+	if err != nil {
+		log.Fatalf("Starting listener: %v", err)
+	}
+	log.Printf("Listening on port %d", *lport)
+
+	pdbpf, err := InitProxyDispatchBPF(<-sockfd, ports...)
+	if err != nil {
+		log.Fatalf("Initializing bpf: %v", err)
+	}
+	defer pdbpf.Close()
+
+	handler := NewProxyDispatchHandler("tcp", 3*time.Second, portRoutingTable)
+	srv := NewServer(handler)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := srv.Serve(l); err != nil && err != ErrServerClosed {
+			log.Printf("Serve: %v", err)
+		}
+		log.Println("Shutdown listener")
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := srv.Shutdown(ctx); err != nil && err != ErrServerClosed {
+				log.Printf("Shutdown: %v", err)
 			}
-
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if err := srv.Serve(l); err != nil && err != ErrServerClosed {
-					log.Printf("Serve: %v", err)
-				}
-				log.Printf("Shutdown listener on %v", addr)
-			}()
+		case <-done:
+			return
 		}
 	}
-
-	<-ctx.Done()
-
-	// Limit how long we will wait for all servers to shutdown.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	for _, srv := range servers {
-		if err := srv.Shutdown(ctx); err != nil {
-			log.Printf("Shutdown: %v", err)
-		}
-	}
-
-	// Wait for Serve goroutines to exit.
-	wg.Wait()
 }
 
 // newCancelableContext returns a context that gets canceled by a SIGINT
 func newCancelableContext() context.Context {
 	doneCh := make(chan os.Signal, 1)
-	signal.Notify(doneCh, os.Interrupt)
+	signal.Notify(doneCh, os.Interrupt, syscall.SIGTERM)
 
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
