@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,7 +14,7 @@ import (
 )
 
 func main() {
-	lport := flag.Int("port", 4001, "port on which to listen")
+	port := flag.Int("port", 0, "route all connections on configured ports to a single listener on this port")
 	flag.Parse()
 
 	ctx := newCancelableContext()
@@ -41,50 +40,20 @@ func main() {
 		log.Fatalf("FATAL: reading configuration: %v", err)
 	}
 
-	ports := []int{}
-	portRoutingTable := map[int]LoadBalancer{}
-	for _, app := range cfg.Apps {
-		lb := NewRoundRobinLoadBalancer(app.Targets)
-		for _, port := range app.Ports {
-			ports = append(ports, port)
-			portRoutingTable[port] = lb
-		}
+	var proxy ProxyServer
+	if *port == 0 {
+		proxy = NewTCPProxy(cfg)
+	} else {
+		proxy = NewConnectionSteeringTCPProxy(cfg, *port)
+		log.Printf("INFO: routing all connections on configured ports to listener on :%d", *port)
 	}
 
-	sockfd := make(chan uintptr, 1)
-	defer close(sockfd)
-
-	lc := net.ListenConfig{
-		KeepAlive: 3 * time.Minute,
-		Control: func(_, _ string, c syscall.RawConn) error {
-			return c.Control(func(fd uintptr) {
-				sockfd <- fd
-			})
-		},
-	}
-
-	l, err := lc.Listen(ctx, "tcp", fmt.Sprintf(":%d", *lport))
-	if err != nil {
-		log.Fatalf("FATAL: starting listener: %v", err)
-	}
-	log.Printf("INFO: listening on port %d", *lport)
-
-	pdbpf, err := InitProxyDispatchBPF(<-sockfd, ports...)
-	if err != nil {
-		log.Fatalf("FATAL: initializing bpf: %v", err)
-	}
-	defer pdbpf.Close()
-
-	handler := NewProxyDispatchHandler("tcp", 3*time.Second, portRoutingTable)
-	srv := NewServer(handler)
-
-	done := make(chan struct{})
+	exit := make(chan struct{})
 	go func() {
-		defer close(done)
-		if err := srv.Serve(l); err != nil && err != ErrServerClosed {
-			log.Printf("ERROR: serving: %v", err)
+		defer close(exit)
+		if err := proxy.ListenAndServe(ctx); err != nil && err != ErrServerClosed {
+			log.Printf("ERROR: listening and serving: %v", err)
 		}
-		log.Println("INFO: shutdown listener")
 	}()
 
 	for {
@@ -92,10 +61,12 @@ func main() {
 		case <-ctx.Done():
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := srv.Shutdown(ctx); err != nil && err != ErrServerClosed {
+			if err := proxy.Shutdown(ctx); err != nil {
 				log.Printf("ERROR: shutting down: %v", err)
 			}
-		case <-done:
+			<-exit
+			return
+		case <-exit:
 			return
 		}
 	}

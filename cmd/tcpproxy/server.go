@@ -85,6 +85,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 	// Mark the server as closed.
 	s.cancel()
+	<-s.ctx.Done()
 
 	// Close the listeners, breaking the Accept loops and causing calls to Serve
 	// to return.
