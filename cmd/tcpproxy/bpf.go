@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"log"
 	"os"
 
 	"github.com/cilium/ebpf"
@@ -22,11 +24,12 @@ type pdBPFObjs struct {
 	Ports  *ebpf.Map     `ebpf:"proxy_ports"`
 }
 
-func (objs *pdBPFObjs) Close() {
-	// Ignoring Close errors for sake of brevity in this exercise.
-	objs.Prog.Close()
-	objs.Socket.Close()
-	objs.Ports.Close()
+func (objs *pdBPFObjs) Close() error {
+	return closeAll([]io.Closer{
+		objs.Prog,
+		objs.Socket,
+		objs.Ports,
+	})
 }
 
 func InitProxyDispatchBPF(sockfd uintptr, ports ...int) (*ProxyDispatchBPF, error) {
@@ -57,6 +60,7 @@ func InitProxyDispatchBPF(sockfd uintptr, ports ...int) (*ProxyDispatchBPF, erro
 	}
 
 	for _, port := range ports {
+		log.Printf("INFO: routing connections on :%d to listener", port)
 		err := objs.Ports.Put(uint16(port), uint8(0))
 		if err != nil {
 			objs.Close()
@@ -66,6 +70,7 @@ func InitProxyDispatchBPF(sockfd uintptr, ports ...int) (*ProxyDispatchBPF, erro
 
 	netnsLink, err := attachNetNs(objs.Prog)
 	if err != nil {
+		objs.Close()
 		return nil, fmt.Errorf("attaching program: %w", err)
 	}
 
@@ -90,8 +95,22 @@ func attachNetNs(prog *ebpf.Program) (*link.NetNsLink, error) {
 	return netnsLink, nil
 }
 
-func (pdbpf *ProxyDispatchBPF) Close() {
-	// Ignoring Close errors for sake of brevity in this exercise.
-	pdbpf.objs.Close()
-	pdbpf.netnsLink.Close()
+func (pdbpf *ProxyDispatchBPF) Close() error {
+	return closeAll([]io.Closer{
+		pdbpf.objs,
+		pdbpf.netnsLink,
+	})
+}
+
+func closeAll(s []io.Closer) error {
+	errs := errSlice{}
+	for _, c := range s {
+		if err := c.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errs
+	}
+	return nil
 }

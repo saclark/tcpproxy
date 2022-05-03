@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -54,10 +56,8 @@ func (s *Server) Serve(l net.Listener) error {
 				if max := 1 * time.Second; tmpDelay > max {
 					tmpDelay = max
 				}
-
 				log.Printf("WARN: accept error: %v; retrying in %v", err, tmpDelay)
 				time.Sleep(tmpDelay)
-
 				continue
 			}
 
@@ -89,10 +89,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// Close the listeners, breaking the Accept loops and causing calls to Serve
 	// to return.
 	s.mu.Lock()
-	var err error
+	errs := errSlice{}
 	for ln := range s.listeners {
-		if cerr := (*ln).Close(); cerr != nil && err == nil {
-			err = cerr
+		if err := (*ln).Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	s.mu.Unlock()
@@ -110,8 +110,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	case <-handling:
 	}
 
-	if err != nil {
-		return err
+	if len(errs) > 0 {
+		return errs
 	}
 
 	return ctx.Err()
@@ -123,5 +123,22 @@ func (s *Server) closed() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+type errSlice []error
+
+func (s errSlice) Error() string {
+	switch len(s) {
+	case 0:
+		return ""
+	case 1:
+		return s.Error()
+	default:
+		msgs := make([]string, len(s))
+		for i, err := range s {
+			msgs[i] = err.Error()
+		}
+		return fmt.Sprintf("%d errors: %s", len(s), strings.Join(msgs, "; "))
 	}
 }
