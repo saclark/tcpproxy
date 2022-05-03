@@ -34,7 +34,7 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive && \
 
 # install go
 ENV GOPATH="/go"
-ENV PATH="/usr/local/go/bin:$GOPATH/bin:$PATH" 
+ENV PATH="/usr/local/go/bin:$GOPATH/bin:$PATH"
 
 RUN curl -L https://go.dev/dl/go1.18.linux-amd64.tar.gz | tar -xz -C /usr/local;
 RUN mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 777 "$GOPATH"
@@ -61,4 +61,3 @@ EXPOSE 22
 
 ENTRYPOINT ["entry_point.sh"]
 CMD    ["/usr/sbin/sshd", "-D", "-e", "-p", "2222"]
-

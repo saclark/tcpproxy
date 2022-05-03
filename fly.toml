@@ -1,23 +1,129 @@
-app = "platform-work-sample-codeserver"
+# fly.toml file generated for 42277 on 2022-05-02T12:23:45-04:00
 
-kill_signal  = "SIGINT"
+app = "42277"
+
+kill_signal = "SIGINT"
 kill_timeout = 5
-processes    = []
+processes = []
 
 [env]
 
-[mounts]
-source      = "data"
-destination = "/root"
-
 [experimental]
-allowed_public_ports = []
-auto_rollback        = true
+  allowed_public_ports = []
+  auto_rollback = true
+
+[mounts]
+  destination = "/root"
+  source = "data"
 
 [[services]]
-internal_port = 2222
-protocol      = "tcp"
-script_checks = []
+  internal_port = 2222
+  protocol = "tcp"
+  script_checks = []
 
   [[services.ports]]
-  port = 2222
+    port = 2222
+
+[[services]]
+  internal_port = 4001
+  protocol = "tcp"
+  script_checks = []
+
+  [[services.ports]]
+    port = 4001
+
+[[services]]
+  internal_port = 5001
+  protocol = "tcp"
+  script_checks = []
+
+  [[services.ports]]
+    port = 5001
+
+[[services]]
+  internal_port = 5200
+  protocol = "tcp"
+  script_checks = []
+
+  [[services.ports]]
+    port = 5200
+
+[[services]]
+  internal_port = 5300
+  protocol = "tcp"
+  script_checks = []
+
+  [[services.ports]]
+    port = 5300
+
+[[services]]
+  internal_port = 5400
+  protocol = "tcp"
+  script_checks = []
+
+  [[services.ports]]
+    port = 5400
+
+[[services]]
+  internal_port = 6001
+  protocol = "tcp"
+  script_checks = []
+
+  [[services.ports]]
+    port = 6001
+
+[[services]]
+  internal_port = 6200
+  protocol = "tcp"
+  script_checks = []
+
+  [[services.ports]]
+    port = 6200
+
+[[services]]
+  internal_port = 6300
+  protocol = "tcp"
+  script_checks = []
+
+  [[services.ports]]
+    port = 6300
+
+[[services]]
+  internal_port = 6400
+  protocol = "tcp"
+  script_checks = []
+
+  [[services.ports]]
+    port = 6400
+
+[[services]]
+  internal_port = 7001
+  protocol = "tcp"
+  script_checks = []
+
+  [[services.ports]]
+    port = 7001
+
+[[services]]
+  internal_port = 7200
+  protocol = "tcp"
+  script_checks = []
+
+  [[services.ports]]
+    port = 7200
+
+[[services]]
+  internal_port = 7300
+  protocol = "tcp"
+  script_checks = []
+
+  [[services.ports]]
+    port = 7300
+
+[[services]]
+  internal_port = 7400
+  protocol = "tcp"
+  script_checks = []
+
+  [[services.ports]]
+    port = 7400
