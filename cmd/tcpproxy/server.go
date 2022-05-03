@@ -55,7 +55,7 @@ func (s *Server) Serve(l net.Listener) error {
 					tmpDelay = max
 				}
 
-				log.Printf("Accept error: %v; retrying in %v", err, tmpDelay)
+				log.Printf("WARN: accept error: %v; retrying in %v", err, tmpDelay)
 				time.Sleep(tmpDelay)
 
 				continue

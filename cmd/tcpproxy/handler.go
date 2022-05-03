@@ -42,7 +42,7 @@ func (h ProxyDispatchHandler) ServeConn(conn net.Conn) {
 	addr := conn.LocalAddr().String()
 	addrp, err := netip.ParseAddrPort(addr)
 	if err != nil {
-		log.Printf("Parsing address port: %v", err)
+		log.Printf("ERROR: parsing address port: %v", err)
 		return
 	}
 
@@ -55,7 +55,7 @@ func (h ProxyDispatchHandler) ServeConn(conn net.Conn) {
 
 	err = proxyConn(conn, h.Network, h.DialTimeout, lb)
 	if err != nil {
-		log.Printf("Error proxying connection: %v", err)
+		log.Printf("ERROR: proxying connection: %v", err)
 	}
 }
 
@@ -77,7 +77,7 @@ func (h ProxyHandler) ServeConn(conn net.Conn) {
 	defer conn.Close()
 	err := proxyConn(conn, h.Network, h.DialTimeout, h.lb)
 	if err != nil {
-		log.Printf("Error proxying connection: %v", err)
+		log.Printf("ERROR: proxying connection: %v", err)
 	}
 }
 
@@ -85,7 +85,7 @@ func proxyConn(conn net.Conn, network string, dialTimeout time.Duration, lb Load
 	return lb.Send(func(addr string) error {
 		targetConn, err := net.DialTimeout(network, addr, dialTimeout)
 		if err != nil {
-			log.Printf("Failed to connect to %s. Trying another target.", addr)
+			log.Printf("WARN: Failed to connect to %s. Trying another target.", addr)
 			return SkipBackend
 		}
 		defer targetConn.Close()

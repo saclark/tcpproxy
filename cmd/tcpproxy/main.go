@@ -38,7 +38,7 @@ func main() {
 	// TODO: put a proxy here :)
 	cfg, err := cfgStore.Read()
 	if err != nil {
-		log.Fatalf("Reading configuration: %v", err)
+		log.Fatalf("FATAL: reading configuration: %v", err)
 	}
 
 	ports := []int{}
@@ -65,13 +65,13 @@ func main() {
 
 	l, err := lc.Listen(ctx, "tcp", fmt.Sprintf(":%d", *lport))
 	if err != nil {
-		log.Fatalf("Starting listener: %v", err)
+		log.Fatalf("FATAL: starting listener: %v", err)
 	}
-	log.Printf("Listening on port %d", *lport)
+	log.Printf("INFO: listening on port %d", *lport)
 
 	pdbpf, err := InitProxyDispatchBPF(<-sockfd, ports...)
 	if err != nil {
-		log.Fatalf("Initializing bpf: %v", err)
+		log.Fatalf("FATAL: initializing bpf: %v", err)
 	}
 	defer pdbpf.Close()
 
@@ -82,9 +82,9 @@ func main() {
 	go func() {
 		defer close(done)
 		if err := srv.Serve(l); err != nil && err != ErrServerClosed {
-			log.Printf("Serve: %v", err)
+			log.Printf("ERROR: serving: %v", err)
 		}
-		log.Println("Shutdown listener")
+		log.Println("INFO: shutdown listener")
 	}()
 
 	for {
@@ -93,7 +93,7 @@ func main() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := srv.Shutdown(ctx); err != nil && err != ErrServerClosed {
-				log.Printf("Shutdown: %v", err)
+				log.Printf("ERROR: shutting down: %v", err)
 			}
 		case <-done:
 			return
