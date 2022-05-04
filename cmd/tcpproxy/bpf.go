@@ -13,6 +13,8 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 )
 
+// ProxyDispatchBPF provides interaction with a socket steering BPF program
+// loaded into the kernel.
 type ProxyDispatchBPF struct {
 	objs      *pdBPFObjs
 	netnsLink *link.NetNsLink
@@ -32,8 +34,24 @@ func (objs *pdBPFObjs) Close() error {
 	})
 }
 
+var maxPorts = 1024
+var bpfELF = "./proxy_dispatch.o"
+
+// InitProxyDispatchBPF takes the underlying file descriptor of a listener to
+// which connections arriving on any of the given ports should be routed.
+//
+// It reads a BPF program ELF file into memory and loads the program along with
+// Port and Socket BPF maps into the kernel. The BPF maps are used to
+// communicate between the running Go program in userspace and the running BPF
+// program in kernelspace. The file descriptor sockfd is put into the single
+// entry Socket map at key 0 and each port is put into the Port map with a value
+// of 0. Finally, the program is attached to a network namespace.
 func InitProxyDispatchBPF(sockfd uintptr, ports ...int) (*ProxyDispatchBPF, error) {
-	elfBytes, err := ioutil.ReadFile("./proxy_dispatch.o")
+	if len(ports) > maxPorts {
+		return nil, fmt.Errorf("number of ports exceeds limit of %d", maxPorts)
+	}
+
+	elfBytes, err := ioutil.ReadFile(bpfELF)
 	if err != nil {
 		return nil, fmt.Errorf("loading elf: %w", err)
 	}
@@ -48,6 +66,7 @@ func InitProxyDispatchBPF(sockfd uintptr, ports ...int) (*ProxyDispatchBPF, erro
 		return nil, fmt.Errorf("loading collection spec: %w", err)
 	}
 
+	// Load the program and maps into the kernel and assign them to a struct.
 	var objs pdBPFObjs
 	if err := spec.LoadAndAssign(&objs, nil); err != nil {
 		return nil, fmt.Errorf("loading and assigning objs: %w", err)
@@ -68,6 +87,7 @@ func InitProxyDispatchBPF(sockfd uintptr, ports ...int) (*ProxyDispatchBPF, erro
 		}
 	}
 
+	// Attach the program to a network namespace.
 	netnsLink, err := attachNetNs(objs.Prog)
 	if err != nil {
 		objs.Close()
@@ -95,6 +115,8 @@ func attachNetNs(prog *ebpf.Program) (*link.NetNsLink, error) {
 	return netnsLink, nil
 }
 
+// Close unloads the BPF program from the kernel, removes the maps, and breaks
+// the link between the program and the network namespace.
 func (pdbpf *ProxyDispatchBPF) Close() error {
 	return closeAll([]io.Closer{
 		pdbpf.objs,

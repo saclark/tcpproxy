@@ -48,9 +48,9 @@ func main() {
 		log.Printf("INFO: routing all connections on configured ports to listener on :%d", *port)
 	}
 
-	exit := make(chan struct{})
+	serving := make(chan struct{})
 	go func() {
-		defer close(exit)
+		defer close(serving)
 		if err := proxy.ListenAndServe(ctx); err != nil && err != ErrServerClosed {
 			log.Printf("ERROR: listening and serving: %v", err)
 		}
@@ -59,14 +59,17 @@ func main() {
 	for {
 		select {
 		case <-ctx.Done():
+			// Process killed, shutdown gracefully.
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := proxy.Shutdown(ctx); err != nil {
 				log.Printf("ERROR: shutting down: %v", err)
 			}
-			<-exit
+			// Wait for ListenAndServe goroutine to exit.
+			<-serving
 			return
-		case <-exit:
+		case <-serving:
+			// ListenAndServe failed.
 			return
 		}
 	}

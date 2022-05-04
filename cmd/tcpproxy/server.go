@@ -11,8 +11,11 @@ import (
 	"time"
 )
 
+// ErrServerClosed indicates that the server has been closed and should not be
+// reused.
 var ErrServerClosed = errors.New("server closed")
 
+// Server serves network connections.
 type Server struct {
 	Handler   ConnHandler
 	listeners map[*net.Listener]struct{}
@@ -32,6 +35,15 @@ func NewServer(handler ConnHandler) *Server {
 	}
 }
 
+// Serve accepts incoming connections on the Listener l, creating a new service
+// goroutine for each. The service goroutines pass connections to s.Handler for
+// handling.
+//
+// Temporary errors from Accept will be retried with exponential backoff until
+// success or delay has exceeded 1 second.
+//
+// Serve always returns a non-nil error. After Shutdown, the returned error is
+// ErrServerClosed.
 func (s *Server) Serve(l net.Listener) error {
 	defer s.removeListener(&l)
 	s.mu.Lock()
@@ -78,6 +90,18 @@ func (s *Server) removeListener(l *net.Listener) {
 	delete(s.listeners, l)
 }
 
+// Shutdown shuts down the server by closing all listeners, then waiting for all
+// handlers to complete or for cancellation of ctx, whichever comes first.
+//
+// If the provided context expires before the shutdown is complete, Shutdown
+// returns the context's error, otherwise it returns any error returned from
+// closing the Server's underlying Listener(s).
+//
+// When Shutdown is called, Serve immediately returns ErrServerClosed. Make sure
+// the program doesn't exit and waits instead for Shutdown to return.
+//
+// Once Shutdown has been called on a server, it should not be reused; future
+// calls to Shutdown or Serve will return ErrServerClosed.
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.closed() {
 		return ErrServerClosed
@@ -111,11 +135,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	case <-handling:
 	}
 
-	if len(errs) > 0 {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	} else if len(errs) > 0 {
 		return errs
 	}
-
-	return ctx.Err()
+	return nil
 }
 
 func (s *Server) closed() bool {

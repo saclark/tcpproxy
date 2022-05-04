@@ -17,19 +17,32 @@ type ProxyServer interface {
 	Shutdown(context.Context) error
 }
 
+// ConnectionSteeringTCPProxy listens on a single port and sets up a BPF socket
+// steering program to route TCP connections from each of the configured ports
+// to one of the port's configured backend targets in a load balanced manner.
+// Unhealthy backends will be skipped until a healthy backend is found or all
+// options have been exhausted.
 type ConnectionSteeringTCPProxy struct {
+	Port int
 	cfg  config.Config
-	port int
 	srv  *Server
 }
 
 func NewConnectionSteeringTCPProxy(cfg config.Config, port int) *ConnectionSteeringTCPProxy {
 	return &ConnectionSteeringTCPProxy{
+		Port: port,
 		cfg:  cfg,
-		port: port,
 	}
 }
 
+// ListenAndServe starts a TCP listener on p.Port, initializes the BPF socket
+// steering program, and begins proxying connections.
+//
+// Accepted connections are configured to enable a 3 minute TCP keep-alive
+// period and a 15 second dial timeout
+//
+// ListenAndServe always returns a non-nil error. After Shutdown, the returned
+// error is ErrServerClosed.
 func (p *ConnectionSteeringTCPProxy) ListenAndServe(ctx context.Context) error {
 	// Collect the ports and associate each with the appropriate targets.
 	ports := []int{}
@@ -42,8 +55,8 @@ func (p *ConnectionSteeringTCPProxy) ListenAndServe(ctx context.Context) error {
 		}
 	}
 
-	handler := NewProxyDispatchHandler("tcp", 3*time.Second, portRoutingTable)
-	srv := NewServer(handler)
+	handler := NewProxyDispatchHandler("tcp", 15*time.Second, portRoutingTable)
+	srv := NewServer(Recoverer(handler))
 	p.srv = srv
 
 	// Capture the underlying connection's file descriptor.
@@ -58,7 +71,7 @@ func (p *ConnectionSteeringTCPProxy) ListenAndServe(ctx context.Context) error {
 		},
 	}
 
-	l, err := lc.Listen(ctx, "tcp", fmt.Sprintf(":%d", p.port))
+	l, err := lc.Listen(ctx, "tcp", fmt.Sprintf(":%d", p.Port))
 	if err != nil {
 		return fmt.Errorf("starting listener: %w", err)
 	}
@@ -72,12 +85,13 @@ func (p *ConnectionSteeringTCPProxy) ListenAndServe(ctx context.Context) error {
 	}
 	defer pdbpf.Close()
 
-	// Serve.
 	err = srv.Serve(l)
 	log.Printf("INFO: shutdown listener on %s", l.Addr())
 	return err
 }
 
+// Shutdown shuts down the server by calling p.srv.Shutdown and returning any
+// error. See documentation for Server.Shutdown.
 func (p *ConnectionSteeringTCPProxy) Shutdown(ctx context.Context) error {
 	if p.srv == nil {
 		return nil
@@ -85,6 +99,10 @@ func (p *ConnectionSteeringTCPProxy) Shutdown(ctx context.Context) error {
 	return p.srv.Shutdown(ctx)
 }
 
+// TCPProxy listens on all of the configured ports and proxies TCP connections
+// on each port to one of the port's configured backend targets in a load
+// balanced manner. Unhealthy backends will be skipped until a healthy backend
+// is found or all options have been exhausted.
 type TCPProxy struct {
 	cfg  config.Config
 	srvs map[string]*Server
@@ -97,6 +115,14 @@ func NewTCPProxy(cfg config.Config) *TCPProxy {
 	}
 }
 
+// ListenAndServe starts a TCP listener for each configured port and begins
+// proxying connections.
+//
+// Accepted connections are configured to enable a 3 minute TCP keep-alive
+// period and a 15 second dial timeout
+//
+// ListenAndServe always returns a non-nil error. After Shutdown, the returned
+// error is ErrServerClosed.
 func (p *TCPProxy) ListenAndServe(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -107,8 +133,8 @@ func (p *TCPProxy) ListenAndServe(ctx context.Context) error {
 
 	for _, app := range p.cfg.Apps {
 		lb := NewRoundRobinLoadBalancer(app.Targets)
-		handler := NewProxyHandler("tcp", 3*time.Second, lb)
-		srv := NewServer(handler)
+		handler := NewProxyHandler("tcp", 15*time.Second, lb)
+		srv := NewServer(Recoverer(handler))
 		p.srvs[app.Name] = srv
 
 		for _, port := range app.Ports {
@@ -139,6 +165,8 @@ func (p *TCPProxy) ListenAndServe(ctx context.Context) error {
 	return ErrServerClosed
 }
 
+// Shutdown shuts down by calling Shutdown on each server in p.srvs and
+// returning any error. See documentation for Server.Shutdown.
 func (p *TCPProxy) Shutdown(ctx context.Context) error {
 	errs := errSlice{}
 	for _, srv := range p.srvs {

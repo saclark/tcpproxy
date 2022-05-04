@@ -9,19 +9,42 @@ import (
 	"time"
 )
 
-type LoadBalancer interface {
-	Send(f func(addr string) error) error
-}
-
 type ConnHandler interface {
 	ServeConn(conn net.Conn)
 }
 
+type ConnHandlerFunc func(conn net.Conn)
+
+func (f ConnHandlerFunc) ServeConn(conn net.Conn) {
+	f(conn)
+}
+
+// Recoverer provides panic recovery middleware.
+func Recoverer(next ConnHandler) ConnHandler {
+	return ConnHandlerFunc(func(conn net.Conn) {
+		defer func() {
+			err := recover()
+			if err != nil {
+				log.Printf("ERROR: panic: %v", err)
+			}
+		}()
+		next.ServeConn(conn)
+	})
+}
+
+type LoadBalancer interface {
+	Send(f func(addr string) error) error
+}
+
+// ProxyDispatchHandler proxies connections using the configured load balancer
+// for the port on which they arrived, if one exists. If connection to a backend
+// fails, another will be tried until either a connection succeeds or all
+// backends have been tried.
 type ProxyDispatchHandler struct {
 	Network          string
 	DialTimeout      time.Duration
 	portRoutingTable map[int]LoadBalancer
-	// Poor man's mutex so we don't have to worry about not copying sync.Mutex.
+	// Poor man's mutex so we aren't passing sync.Mutex by value to ServeConn.
 	lock chan struct{}
 }
 
@@ -59,6 +82,9 @@ func (h ProxyDispatchHandler) ServeConn(conn net.Conn) {
 	}
 }
 
+// ProxyHandler proxies connections using the provided load balancer. If
+// connection to a backend fails, another will be tried until either a
+// connection succeeds or all backends have been tried.
 type ProxyHandler struct {
 	Network     string
 	DialTimeout time.Duration
