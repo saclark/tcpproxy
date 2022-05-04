@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"strings"
 	"sync"
-	"time"
 )
 
 // ErrServerClosed indicates that the server has been closed and should not be
@@ -39,9 +37,6 @@ func NewServer(handler ConnHandler) *Server {
 // goroutine for each. The service goroutines pass connections to s.Handler for
 // handling.
 //
-// Temporary errors from Accept will be retried with exponential backoff until
-// success or delay has exceeded 1 second.
-//
 // Serve always returns a non-nil error. After Shutdown, the returned error is
 // ErrServerClosed.
 func (s *Server) Serve(l net.Listener) error {
@@ -50,29 +45,12 @@ func (s *Server) Serve(l net.Listener) error {
 	s.listeners[&l] = struct{}{}
 	s.mu.Unlock()
 
-	var tmpDelay time.Duration
-
 	for {
 		conn, err := l.Accept()
 		if err != nil {
 			if s.closed() {
 				return ErrServerClosed
 			}
-
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				if tmpDelay == 0 {
-					tmpDelay = 5 * time.Millisecond
-				} else {
-					tmpDelay *= 2
-				}
-				if max := 1 * time.Second; tmpDelay > max {
-					tmpDelay = max
-				}
-				log.Printf("WARN: accept error: %v; retrying in %v", err, tmpDelay)
-				time.Sleep(tmpDelay)
-				continue
-			}
-
 			return err
 		}
 
