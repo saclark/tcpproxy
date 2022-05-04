@@ -39,7 +39,8 @@ type LoadBalancer interface {
 // ProxyDispatchHandler proxies connections using the configured load balancer
 // for the port on which they arrived, if one exists. If connection to a backend
 // fails, another will be tried until either a connection succeeds or all
-// backends have been tried.
+// backends have been tried. Any errors are written back to the client
+// connection.
 type ProxyDispatchHandler struct {
 	Network          string
 	DialTimeout      time.Duration
@@ -84,7 +85,8 @@ func (h ProxyDispatchHandler) ServeConn(conn net.Conn) {
 
 // ProxyHandler proxies connections using the provided load balancer. If
 // connection to a backend fails, another will be tried until either a
-// connection succeeds or all backends have been tried.
+// connection succeeds or all backends have been tried. Any errors are written
+// back to the client connection.
 type ProxyHandler struct {
 	Network     string
 	DialTimeout time.Duration
@@ -108,7 +110,7 @@ func (h ProxyHandler) ServeConn(conn net.Conn) {
 }
 
 func proxyConn(conn net.Conn, network string, dialTimeout time.Duration, lb LoadBalancer) error {
-	return lb.Send(func(addr string) error {
+	err := lb.Send(func(addr string) error {
 		targetConn, err := net.DialTimeout(network, addr, dialTimeout)
 		if err != nil {
 			log.Printf("WARN: Failed to connect to %s. Trying another target.", addr)
@@ -131,6 +133,15 @@ func proxyConn(conn net.Conn, network string, dialTimeout time.Duration, lb Load
 
 		return nil
 	})
+	if err != nil {
+		if err == ErrNoHealthyBackends {
+			writeConn(conn, []byte("ERROR: no healthy target"))
+		} else {
+			writeConn(conn, []byte(err.Error()))
+		}
+		return err
+	}
+	return nil
 }
 
 func copyConn(dst, src net.Conn) error {
@@ -142,6 +153,21 @@ func copyConn(dst, src net.Conn) error {
 		if err := dst.CloseWrite(); err != nil {
 			return fmt.Errorf("closing write side of connection: %w", err)
 		}
+	}
+	return nil
+}
+
+func writeConn(conn net.Conn, b []byte) error {
+	deadline := time.Now().Add(3 * time.Second)
+	if err := conn.SetWriteDeadline(deadline); err != nil {
+		return fmt.Errorf("setting write deadline: %w", err)
+	}
+	if _, err := conn.Write(b); err != nil {
+		return fmt.Errorf("writing to conn: %w", err)
+	}
+	// Reset the deadline.
+	if err := conn.SetWriteDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("setting write deadline: %w", err)
 	}
 	return nil
 }
