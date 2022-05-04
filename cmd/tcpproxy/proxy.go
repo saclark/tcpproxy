@@ -39,7 +39,7 @@ func NewConnectionSteeringTCPProxy(cfg config.Config, port int) *ConnectionSteer
 // steering program, and begins proxying connections.
 //
 // Accepted connections are configured to enable a 3 minute TCP keep-alive
-// period and a 15 second dial timeout
+// period and backend connections are made with a 15 second dial timeout.
 //
 // ListenAndServe always returns a non-nil error. After Shutdown, the returned
 // error is ErrServerClosed.
@@ -48,14 +48,16 @@ func (p *ConnectionSteeringTCPProxy) ListenAndServe(ctx context.Context) error {
 	ports := []int{}
 	portRoutingTable := map[int]LoadBalancer{}
 	for _, app := range p.cfg.Apps {
-		lb := NewRoundRobinLoadBalancer(app.Targets)
+		lb := NewRoundRobinLoadBalancer(app.Targets, func(address string) (net.Conn, error) {
+			return net.DialTimeout("tcp", address, 15*time.Second)
+		})
 		for _, port := range app.Ports {
 			ports = append(ports, port)
 			portRoutingTable[port] = lb
 		}
 	}
 
-	handler := NewProxyDispatchHandler("tcp", 15*time.Second, portRoutingTable)
+	handler := NewProxyDispatchHandler(portRoutingTable)
 	srv := NewServer(Recoverer(handler))
 	p.srv = srv
 
@@ -119,7 +121,7 @@ func NewTCPProxy(cfg config.Config) *TCPProxy {
 // proxying connections.
 //
 // Accepted connections are configured to enable a 3 minute TCP keep-alive
-// period and a 15 second dial timeout
+// period and backend connections are made with a 15 second dial timeout.
 //
 // ListenAndServe always returns a non-nil error. After Shutdown, the returned
 // error is ErrServerClosed.
@@ -132,8 +134,10 @@ func (p *TCPProxy) ListenAndServe(ctx context.Context) error {
 	errs := errSlice{}
 
 	for _, app := range p.cfg.Apps {
-		lb := NewRoundRobinLoadBalancer(app.Targets)
-		handler := NewProxyHandler("tcp", 15*time.Second, lb)
+		lb := NewRoundRobinLoadBalancer(app.Targets, func(address string) (net.Conn, error) {
+			return net.DialTimeout("tcp", address, 15*time.Second)
+		})
+		handler := NewProxyHandler(lb)
 		srv := NewServer(Recoverer(handler))
 		p.srvs[app.Name] = srv
 

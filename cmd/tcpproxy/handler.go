@@ -33,28 +33,22 @@ func Recoverer(next ConnHandler) ConnHandler {
 }
 
 type LoadBalancer interface {
-	Send(f func(addr string) error) error
+	Connect() (net.Conn, error)
 }
 
 // ProxyDispatchHandler proxies connections using the configured load balancer
-// for the port on which they arrived, if one exists. If connection to a backend
-// fails, another will be tried until either a connection succeeds or all
-// backends have been tried. Any errors are written back to the client
-// connection.
+// for the port on which they arrived, if one exists. Any errors are written
+// back to the client connection.
 type ProxyDispatchHandler struct {
-	Network          string
-	DialTimeout      time.Duration
 	portRoutingTable map[int]LoadBalancer
 	// Poor man's mutex so we aren't passing sync.Mutex by value to ServeConn.
 	lock chan struct{}
 }
 
-func NewProxyDispatchHandler(network string, dialTimeout time.Duration, portRoutingTable map[int]LoadBalancer) *ProxyDispatchHandler {
+func NewProxyDispatchHandler(portRoutingTable map[int]LoadBalancer) *ProxyDispatchHandler {
 	lock := make(chan struct{}, 1)
 	lock <- struct{}{}
 	return &ProxyDispatchHandler{
-		Network:          network,
-		DialTimeout:      dialTimeout,
 		portRoutingTable: portRoutingTable,
 		lock:             lock,
 	}
@@ -77,70 +71,56 @@ func (h ProxyDispatchHandler) ServeConn(conn net.Conn) {
 		return
 	}
 
-	err = proxyConn(conn, h.Network, h.DialTimeout, lb)
+	err = proxyConn(conn, lb)
 	if err != nil {
 		log.Printf("ERROR: proxying connection: %v", err)
 	}
 }
 
-// ProxyHandler proxies connections using the provided load balancer. If
-// connection to a backend fails, another will be tried until either a
-// connection succeeds or all backends have been tried. Any errors are written
-// back to the client connection.
+// ProxyHandler proxies connections using the provided load balancer. Any errors
+// are written back to the client connection.
 type ProxyHandler struct {
-	Network     string
-	DialTimeout time.Duration
-	lb          LoadBalancer
+	lb LoadBalancer
 }
 
-func NewProxyHandler(network string, dialTimeout time.Duration, lb LoadBalancer) *ProxyHandler {
+func NewProxyHandler(lb LoadBalancer) *ProxyHandler {
 	return &ProxyHandler{
-		Network:     network,
-		DialTimeout: dialTimeout,
-		lb:          lb,
+		lb: lb,
 	}
 }
 
 func (h ProxyHandler) ServeConn(conn net.Conn) {
 	defer conn.Close()
-	err := proxyConn(conn, h.Network, h.DialTimeout, h.lb)
+	err := proxyConn(conn, h.lb)
 	if err != nil {
 		log.Printf("ERROR: proxying connection: %v", err)
 	}
 }
 
-func proxyConn(conn net.Conn, network string, dialTimeout time.Duration, lb LoadBalancer) error {
-	err := lb.Send(func(addr string) error {
-		targetConn, err := net.DialTimeout(network, addr, dialTimeout)
-		if err != nil {
-			log.Printf("WARN: Failed to connect to %s. Trying another target.", addr)
-			return SkipBackend
-		}
-		defer targetConn.Close()
-
-		done := make(chan error)
-		go func() {
-			defer close(done)
-			done <- copyConn(targetConn, conn)
-		}()
-
-		if err := copyConn(conn, targetConn); err != nil {
-			return fmt.Errorf("copying remote conn to local: %w", err)
-		}
-		if err := <-done; err != nil {
-			return fmt.Errorf("copying local conn to remote: %w", err)
-		}
-
-		return nil
-	})
+func proxyConn(conn net.Conn, lb LoadBalancer) error {
+	targetConn, err := lb.Connect()
 	if err != nil {
-		if err == ErrNoHealthyBackends {
-			writeConn(conn, []byte("ERROR: no healthy target"))
-		} else {
-			writeConn(conn, []byte(err.Error()))
-		}
+		writeConn(conn, []byte(fmt.Sprintf("ERROR: %v", err)))
 		return err
 	}
+	defer targetConn.Close()
+
+	done := make(chan error)
+	go func() {
+		defer close(done)
+		done <- copyConn(targetConn, conn)
+	}()
+
+	if err := copyConn(conn, targetConn); err != nil {
+		writeConn(conn, []byte(fmt.Sprintf("ERROR: %v", err)))
+		return fmt.Errorf("copying remote conn to local: %w", err)
+	}
+
+	if err := <-done; err != nil {
+		writeConn(conn, []byte(fmt.Sprintf("ERROR: %v", err)))
+		return fmt.Errorf("copying local conn to remote: %w", err)
+	}
+
 	return nil
 }
 
