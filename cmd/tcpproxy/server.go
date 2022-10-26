@@ -137,7 +137,7 @@ func (s errSlice) Error() string {
 	case 0:
 		return ""
 	case 1:
-		return s.Error()
+		return s[0].Error()
 	default:
 		msgs := make([]string, len(s))
 		for i, err := range s {
