@@ -6,7 +6,6 @@ import (
 	"log"
 	"net"
 	"net/netip"
-	"time"
 )
 
 type ConnHandler interface {
@@ -37,8 +36,7 @@ type LoadBalancer interface {
 }
 
 // ProxyDispatchHandler proxies connections using the configured load balancer
-// for the port on which they arrived, if one exists. Any errors are written
-// back to the client connection.
+// for the port on which they arrived, if one exists.
 type ProxyDispatchHandler struct {
 	portRoutingTable map[int]LoadBalancer
 	// Poor man's mutex so we aren't passing sync.Mutex by value to ServeConn.
@@ -77,8 +75,7 @@ func (h ProxyDispatchHandler) ServeConn(conn net.Conn) {
 	}
 }
 
-// ProxyHandler proxies connections using the provided load balancer. Any errors
-// are written back to the client connection.
+// ProxyHandler proxies connections using the provided load balancer.
 type ProxyHandler struct {
 	lb LoadBalancer
 }
@@ -100,7 +97,6 @@ func (h ProxyHandler) ServeConn(conn net.Conn) {
 func proxyConn(conn net.Conn, lb LoadBalancer) error {
 	targetConn, err := lb.Connect()
 	if err != nil {
-		writeConn(conn, []byte(fmt.Sprintf("ERROR: %v", err)))
 		return err
 	}
 	defer targetConn.Close()
@@ -112,12 +108,10 @@ func proxyConn(conn net.Conn, lb LoadBalancer) error {
 	}()
 
 	if err := copyConn(conn, targetConn); err != nil {
-		writeConn(conn, []byte(fmt.Sprintf("ERROR: %v", err)))
 		return fmt.Errorf("copying remote conn to local: %w", err)
 	}
 
 	if err := <-done; err != nil {
-		writeConn(conn, []byte(fmt.Sprintf("ERROR: %v", err)))
 		return fmt.Errorf("copying local conn to remote: %w", err)
 	}
 
@@ -133,21 +127,6 @@ func copyConn(dst, src net.Conn) error {
 		if err := dst.CloseWrite(); err != nil {
 			return fmt.Errorf("closing write side of connection: %w", err)
 		}
-	}
-	return nil
-}
-
-func writeConn(conn net.Conn, b []byte) error {
-	deadline := time.Now().Add(3 * time.Second)
-	if err := conn.SetWriteDeadline(deadline); err != nil {
-		return fmt.Errorf("setting write deadline: %w", err)
-	}
-	if _, err := conn.Write(b); err != nil {
-		return fmt.Errorf("writing to conn: %w", err)
-	}
-	// Reset the deadline.
-	if err := conn.SetWriteDeadline(time.Time{}); err != nil {
-		return fmt.Errorf("setting write deadline: %w", err)
 	}
 	return nil
 }
