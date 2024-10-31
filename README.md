@@ -2,7 +2,7 @@
 
 A raw TCP proxy capable of load balancing connections on a configured set of ports to a configured set of backends. It features an optional eBPF socket lookup hook to steer incoming connections on any of the configured ports to a single listener socket, based on [this talk](https://www.youtube.com/watch?v=vCJ8kDYI8ZE).
 
-Note that this is a prototype created for hoots and toots and as a way to play with eBPF. It only does round robin load balancing, does not support live configuration reload, and unhealthy targets are not removed from the available target pool with background health checks. Such things were not the point or focus of this project.
+> **Note**: This is a prototype created for hoots and toots and as a way to play with eBPF. It only does round robin load balancing, does not support live configuration reload, and unhealthy targets are not removed from the available target pool with background health checks. Such things were not the point or focus of this project.
 
 ## Build
 
